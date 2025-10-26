@@ -1,0 +1,317 @@
+-- Full all-in-one script with fixed working toggles and layout adjustments
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+
+local Options, Toggles = Library.Options, Library.Toggles
+
+local Window = Library:CreateWindow({
+    Title = "mspaint",
+    Footer = "version: example",
+    Icon = 95816097006870,
+    NotifySide = "Right",
+    ShowCustomCursor = true,
+})
+
+local Tabs = {
+    Player = Window:AddTab("Player", "user"),
+    Pets = Window:AddTab("Pets", "paw-print"),
+    Progression = Window:AddTab("Progression", "gem"),
+    ["UI Settings"] = Window:AddTab("UI Settings", "settings"),
+}
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- Player tab
+local PlayerTab = Tabs.Player:AddLeftGroupbox("Player Controls")
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+
+local function updateCharacter()
+    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    Humanoid = Character:WaitForChild("Humanoid")
+end
+LocalPlayer.CharacterAdded:Connect(updateCharacter)
+
+PlayerTab:AddSlider("WalkSpeed", {Text = "WalkSpeed", Default = 16, Min = 0, Max = 200, Callback = function(v) if Humanoid then Humanoid.WalkSpeed = v end end})
+PlayerTab:AddSlider("JumpPower", {Text = "JumpPower", Default = 50, Min = 0, Max = 200, Callback = function(v) if Humanoid then Humanoid.JumpPower = v end end})
+PlayerTab:AddSlider("FOV", {Text = "Field of View", Default = 70, Min = 1, Max = 120, Callback = function(v) Camera.FieldOfView = v end})
+
+-- Fly and noclip
+local FLYING, BV, BG, flyConn1, flyConn2, flyHeartbeat
+local function startFly()
+    if FLYING then return end
+    local HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+    if not HRP then return end
+    FLYING = true
+    if Humanoid then Humanoid.PlatformStand = true end
+    BV = Instance.new("BodyVelocity", HRP); BV.MaxForce = Vector3.new(9e9,9e9,9e9)
+    BG = Instance.new("BodyGyro", HRP); BG.MaxTorque = Vector3.new(9e9,9e9,9e9); BG.P = 9e4; BG.CFrame = HRP.CFrame
+    local CTRL = {F=0,B=0,L=0,R=0,U=0,D=0}; local SPEED = 50
+    flyConn1 = UserInputService.InputBegan:Connect(function(i,gp) if gp then return end local k=i.KeyCode if k==Enum.KeyCode.W then CTRL.F=SPEED end if k==Enum.KeyCode.S then CTRL.B=-SPEED end if k==Enum.KeyCode.A then CTRL.L=-SPEED end if k==Enum.KeyCode.D then CTRL.R=SPEED end if k==Enum.KeyCode.Space then CTRL.U=SPEED end if k==Enum.KeyCode.LeftShift then CTRL.D=-SPEED end end)
+    flyConn2 = UserInputService.InputEnded:Connect(function(i) local k=i.KeyCode if k==Enum.KeyCode.W then CTRL.F=0 end if k==Enum.KeyCode.S then CTRL.B=0 end if k==Enum.KeyCode.A then CTRL.L=0 end if k==Enum.KeyCode.D then CTRL.R=0 end if k==Enum.KeyCode.Space then CTRL.U=0 end if k==Enum.KeyCode.LeftShift then CTRL.D=0 end end)
+    flyHeartbeat = RunService.Heartbeat:Connect(function()
+        local HRP = Character and Character:FindFirstChild("HumanoidRootPart")
+        if not FLYING or not HRP then return end
+        if BG then BG.CFrame = Camera.CFrame end
+        local move = (Camera.CFrame.LookVector * (CTRL.F + CTRL.B)) + (Camera.CFrame.RightVector * (CTRL.L + CTRL.R)) + Vector3.new(0, (CTRL.U + CTRL.D), 0)
+        if BV then BV.Velocity = (move.Magnitude > 0 and move.Unit * SPEED) or Vector3.zero end
+    end)
+    Library:Notify("Fly Enabled", 3)
+end
+local function stopFly()
+    if not FLYING then return end
+    FLYING=false
+    if Humanoid then Humanoid.PlatformStand=false end
+    if BV then BV:Destroy() BV=nil end
+    if BG then BG:Destroy() BG=nil end
+    if flyConn1 then flyConn1:Disconnect() flyConn1=nil end
+    if flyConn2 then flyConn2:Disconnect() flyConn2=nil end
+    if flyHeartbeat then flyHeartbeat:Disconnect() flyHeartbeat=nil end
+    Library:Notify("Fly Disabled", 3)
+end
+PlayerTab:AddToggle("Fly", {Text="Fly", Default=false, Callback=function(v) if v then startFly() else stopFly() end end})
+
+local noclipConn
+PlayerTab:AddToggle("Noclip", {Text="Noclip", Default=false, Callback=function(v)
+    if v then noclipConn = RunService.Stepped:Connect(function() if Character then for _,p in ipairs(Character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end end end) Library:Notify("Noclip Enabled",3)
+    else if noclipConn then noclipConn:Disconnect() noclipConn=nil end Library:Notify("Noclip Disabled",3) end
+end})
+
+-- Pets tab
+local PetsTab = Tabs.Pets:AddLeftGroupbox("Pet Giver")
+local petRoot = ReplicatedStorage:FindFirstChild("Pets")
+local petObjects = {}
+local function collectPets(folder)
+    for _,obj in ipairs(folder:GetChildren()) do if obj:IsA("Folder") then collectPets(obj) else table.insert(petObjects, obj) end end
+end
+if petRoot then collectPets(petRoot) end
+local displayPets = {}
+for _,pet in ipairs(petObjects) do
+    local rarity="Unknown"
+    local pd=pet:FindFirstChild("PetDisplay")
+    if pd and pd:FindFirstChild("PetRarity") then
+        local r=pd.PetRarity
+        if r:IsA("TextLabel") then rarity=r.Text elseif r:IsA("StringValue") then rarity=r.Value end
+    end
+    table.insert(displayPets, pet.Name.." ["..rarity.."]")
+end
+local petDropdown = PetsTab:AddDropdown("PetDropdown", {Text="Select Pet", Values=displayPets, Default=(displayPets[1] or ""), Searchable=true})
+local giveAmount = 1
+PetsTab:AddInput("GiveAmount", {Text="Amount to Give", Numeric=true, Placeholder="Enter number", Callback=function(v) local n=tonumber(v) if n and n>0 then giveAmount=math.floor(n) end end})
+PetsTab:AddButton("Give Pet", function()
+    local selected = Options.PetDropdown and Options.PetDropdown.Value
+    if not selected then Library:Notify("Select a pet first",3) return end
+    local petName = selected:match("^(.-) %[[^]]+%]$") or selected
+    local ok, rem = pcall(function() return ReplicatedStorage:WaitForChild("Remotes", 9e9) end)
+    if not ok or not rem then Library:Notify("Remotes not found",3) return end
+    local ev = rem:FindFirstChild("PetCageEvent")
+    if not ev then Library:Notify("PetCageEvent not found",3) return end
+    for i=1,giveAmount do pcall(function() ev:FireServer(petName) end) end
+    Library:Notify("Sent give pet request for: "..petName.." x"..tostring(giveAmount), 3)
+end)
+
+local invLabel = PetsTab:AddLabel("Inventory safe")
+do local lbl = invLabel.TextLabel or invLabel.Label if lbl then lbl.TextWrapped=true lbl.TextSize=13 lbl.Size=UDim2.new(1,-10,0,22) end end
+task.spawn(function()
+    while wait(0.25) do
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local main = pg and pg:FindFirstChild("MainGui", true)
+            local f = main and main:FindFirstChild("PetsFrame", true)
+            if f and f.TopFrame and f.TopFrame:FindFirstChild("MaxInventory") then
+                local t = f.TopFrame.MaxInventory.Text or ""
+                local cur,max = t:match("(%d+)%s*/%s*(%d+)")
+                cur,max = tonumber(cur), tonumber(max)
+                if cur and max then
+                    local remain = max - cur
+                    if remain <= 0 then invLabel:SetText("Inventory full")
+                    elseif giveAmount > remain then invLabel:SetText("Overflow risk ("..cur.."/"..max..")")
+                    elseif remain <= 10 then invLabel:SetText("Near full ("..cur.."/"..max.."). Only "..remain.." left")
+                    else invLabel:SetText("Inventory safe ("..cur.."/"..max..")") end
+                end
+            end
+        end)
+    end
+end)
+
+-- Mutation tab
+local MutTab = Tabs.Pets:AddRightGroupbox("Pet Mutation")
+MutTab:AddDropdown("MutType", {Text="Mutation Type", Values={"Gold","Diamond","Void"}, Default="Gold"})
+local mutCount = 1
+local chanceLabel = MutTab:AddLabel("Success Chance: 20%")
+local costLabel = MutTab:AddLabel("Cost: 100 Gems")
+local gemLabel = MutTab:AddLabel("Current Gems: 0")
+do
+    local l = chanceLabel.TextLabel or chanceLabel.Label if l then l.TextWrapped=true l.Size=UDim2.new(1,-10,0,18) end
+    local l2 = costLabel.TextLabel or costLabel.Label if l2 then l2.TextWrapped=true l2.Size=UDim2.new(1,-10,0,18) end
+    local l3 = gemLabel.TextLabel or gemLabel.Label if l3 then l3.TextWrapped=true l3.Size=UDim2.new(1,-10,0,18) end
+end
+MutTab:AddSlider("MutCount", {Text="Pets Used", Default=1, Min=1, Max=5, Callback=function(v) mutCount=v local chance=math.min(v*20,100) local t=Options.MutType and Options.MutType.Value or "Gold" local per=(t=="Gold" and 100) or (t=="Diamond" and 200) or 400 chanceLabel:SetText("Success Chance: "..chance.."%" ) costLabel:SetText("Cost: "..(per*v).." Gems") end})
+local petNameInputValue = ""
+MutTab:AddInput("MutatePetInput", {Text="Pet Name (exact)", Placeholder="Exact inventory name", Callback=function(v) petNameInputValue = tostring(v or "") end})
+local warnLabel = MutTab:AddLabel("")
+do local w = warnLabel.TextLabel or warnLabel.Label if w then w.TextWrapped=true w.Size=UDim2.new(1,-10,0,22) end end
+task.spawn(function()
+    while wait(0.25) do
+        pcall(function()
+            if LocalPlayer:FindFirstChild("Gems") then gemLabel:SetText("Current Gems: "..tostring(LocalPlayer.Gems.Value)) end
+            local t = Options.MutType and Options.MutType.Value or "Gold"
+            local lower = (petNameInputValue or ""):lower()
+            local warn = false
+            if lower:match("^void%s") then warn=true
+            elseif t=="Gold" and (lower:match("^gold%s") or lower:match("^diamond%s") or lower:match("^void%s")) then warn=true
+            elseif t=="Diamond" and (lower:match("^diamond%s") or lower:match("^void%s")) then warn=true
+            elseif t=="Void" and lower:match("^void%s") then warn=true end
+            warnLabel:SetText(warn and "Do not mutate same or higher mutation." or "")
+        end)
+    end
+end)
+MutTab:AddButton("Mutate", function()
+    if petNameInputValue == "" then Library:Notify("Enter pet name",3) return end
+    local t = Options.MutType and Options.MutType.Value or "Gold"
+    local chance = math.min(mutCount*20,100)
+    local per = (t=="Gold" and 100) or (t=="Diamond" and 200) or 400
+    local cost = per * mutCount
+    if not LocalPlayer:FindFirstChild("Gems") or LocalPlayer.Gems.Value < cost then Library:Notify("Not enough gems",3) return end
+    local rem = ReplicatedStorage:WaitForChild("PetRemotes", 9e9)
+    local evName = (t=="Gold" and "GoldPetCraftEvent") or (t=="Diamond" and "DiamondPetCraftEvent") or "VoidPetCraftEvent"
+    local ev = rem:WaitForChild(evName, 9e9)
+    pcall(function() ev:FireServer(petNameInputValue, chance) end)
+end)
+
+-- Progression tab
+local Prog = Tabs.Progression:AddLeftGroupbox("Progression")
+local spinValue = 1
+Prog:AddSlider("SpinPrize", {Text="Spin Prize ID", Default=1, Min=1, Max=10, Callback=function(v) spinValue = v end})
+Prog:AddButton("Spin Once", function()
+    pcall(function()
+        local rem = ReplicatedStorage:WaitForChild("Remotes", 9e9)
+        rem:WaitForChild("SpinPrizeEvent", 9e9):FireServer({spinValue})
+    end)
+end)
+
+-- Wheel info box separate
+local WheelInfo = Tabs.Progression:AddRightGroupbox("Wheel Info")
+local wheelLabel = WheelInfo:AddLabel("1 = 100 gems\n2 = 2.5k money\n3 = 1 wheel spin\n4 = pet\n5 = 250 gems\n6 = 1k money\n7 = 3 wheel spins\n8 = 10x money\n9 = 75 gems\n10 = 10 wheel spins")
+do local lbl = wheelLabel.TextLabel or wheelLabel.Label if lbl then lbl.TextWrapped=true lbl.Size=UDim2.new(1,-10,0,140) end end
+
+-- Anticheat warning below toggles
+local acLabel = Prog:AddLabel("Shards, Wins, and Gems may pause due to anticheat but resume automatically.")
+do local lbl = acLabel.TextLabel or acLabel.Label if lbl then lbl.TextWrapped=true lbl.Size=UDim2.new(1,-10,0,22) end end
+
+-- Running flags to prevent duplicate loops
+local running = {
+    AutoSpin = false,
+    AutoMoney = false,
+    AutoShard = false,
+    AutoWins = false,
+    AutoGems = false,
+}
+
+-- Helper to fire remotes with provided args table
+local function safeFire(remoteName, argsTable)
+    pcall(function()
+        local rem = ReplicatedStorage:WaitForChild("Remotes", 9e9)
+        local ev = rem:WaitForChild(remoteName, 9e9)
+        ev:FireServer(unpack(argsTable))
+    end)
+end
+
+-- Toggle loops using while wait(0.25)
+Prog:AddToggle("AutoSpin", {Text="Auto Spin", Default=false, Callback=function(v)
+    if v and not running.AutoSpin then
+        running.AutoSpin = true
+        spawn(function()
+            while running.AutoSpin do
+                wait(0.25)
+                local args = {[1] = spinValue}
+                safeFire("SpinPrizeEvent", args)
+            end
+        end)
+    else
+        running.AutoSpin = false
+    end
+end})
+
+Prog:AddToggle("AutoMoney", {Text="10x Money", Default=false, Callback=function(v)
+    if v and not running.AutoMoney then
+        running.AutoMoney = true
+        spawn(function()
+            while running.AutoMoney do
+                wait(0.25)
+                local args = {[1] = 8}
+                safeFire("SpinPrizeEvent", args)
+            end
+        end)
+    else
+        running.AutoMoney = false
+    end
+end})
+
+Prog:AddToggle("AutoShard", {Text="Get Lightshards", Default=false, Callback=function(v)
+    if v and not running.AutoShard then
+        running.AutoShard = true
+        spawn(function()
+            while running.AutoShard do
+                wait(0.25)
+                local args = {[1] = "LightShard"}
+                safeFire("TreasureEvent", args)
+            end
+        end)
+    else
+        running.AutoShard = false
+    end
+end})
+
+Prog:AddToggle("AutoWins", {Text="Get Wins", Default=false, Callback=function(v)
+    if v and not running.AutoWins then
+        running.AutoWins = true
+        spawn(function()
+            while running.AutoWins do
+                wait(0.25)
+                local args = {[1] = "Cup15"}
+                safeFire("TreasureEvent", args)
+            end
+        end)
+    else
+        running.AutoWins = false
+    end
+end})
+
+Prog:AddToggle("AutoGems", {Text="Get Gems", Default=false, Callback=function(v)
+    if v and not running.AutoGems then
+        running.AutoGems = true
+        spawn(function()
+            while running.AutoGems do
+                wait(0.25)
+                local args = {[1] = "Blackhole2"}
+                safeFire("TreasureEvent", args)
+            end
+        end)
+    else
+        running.AutoGems = false
+    end
+end})
+
+-- UI Settings
+local Menu = Tabs["UI Settings"]:AddLeftGroupbox("Menu")
+Menu:AddButton("Unload", function() Library:Unload() end)
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+ThemeManager:ApplyToTab(Tabs["UI Settings"])
+SaveManager:BuildConfigSection(Tabs["UI Settings"])
+SaveManager:LoadAutoloadConfig()
+
+Library:OnUnload(function()
+    stopFly()
+    if noclipConn then noclipConn:Disconnect() end
+end)
